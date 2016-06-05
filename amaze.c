@@ -1,17 +1,6 @@
 /*
  * Copyright David Leonard, 2000. All rights reserved. <Berkeley license>
  * Modified for Rockbox by Jerry Chapman, 2007
- 
- * Based on an ancient game published in Australian Personal Computer 
- * Magazine (1986?) also called 'amaze'. Written in BASIC I recall. No idea
- * who the author was, I'm afraid. I just remember porting it from QBASIC
- * to AppleSoft BASIC, and simplifying the perspective line drawing code.
-
- * David Leonard's program was written using the curses library.  All of the
- * curses functions referenced were redefined/wrapped for rockbox.
- *
- * Thanks to hcs on #rockbox who was instrumental in explaining and fixing
- * my issues with the stack and pulling me out of the quagmire I was stuck in.
  *
  * All files in this archive are subject to the GNU General Public License.
  * See the file COPYING in the source tree root for full license agreement.
@@ -21,66 +10,102 @@
  */
 
 #include "plugin.h"
-#include "lib/helper.h"
-#include "lib/configfile.h"
+#include "lib/pluginlib_actions.h"
 
 
+/* Button definitions re-stolen from robotfindskitten.c */
 
+#if (CONFIG_KEYPAD == IPOD_4G_PAD) || \
+    (CONFIG_KEYPAD == IPOD_3G_PAD) || \
+    (CONFIG_KEYPAD == IPOD_1G2G_PAD)
+#undef __PLUGINLIB_ACTIONS_H__
+#define BUT_QUIT        (BUTTON_SELECT | BUTTON_MENU)
+#define BUT_RIGHT       BUTTON_RIGHT
+#define BUT_RIGHTRPT    (BUTTON_RIGHT | BUTTON_REPEAT)
+#define BUT_LEFT        BUTTON_LEFT
+#define BUT_LEFTRPT     (BUTTON_LEFT | BUTTON_REPEAT)
+#define BUT_UP          BUTTON_MENU
+#define BUT_UPRPT       (BUTTON_MENU | BUTTON_REPEAT)
+#define BUT_DOWN        BUTTON_PLAY
+#define BUT_DOWNRPT     (BUTTON_PLAY | BUTTON_REPEAT)
+/*define BUT_MARK        BUTTON_SELECT*/
+#define BUT_COMPASS     (BUTTON_SELECT | BUTTON_PLAY)
 
-//can't set these five to zero
-int show_compass;		/* -c */
-int show_map;			/* -m */
-int can_shoot;			/* -s */
-int remember_visited;		/* -v */
-//int continue_on_win;		/* -n */
+#else
 
-typedef struct {
-       char chr;
-       int attrib;
-} fig; //attempt to redefine chtype w/o ncurses
+#define BUT_QUIT        PLA_QUIT
+#define BUT_RIGHT       PLA_RIGHT
+#define BUT_RIGHTRPT    PLA_RIGHT_REPEAT
+#define BUT_LEFT        PLA_LEFT
+#define BUT_LEFTRPT     PLA_LEFT_REPEAT
+#define BUT_UP          PLA_UP
+#define BUT_UPRPT       PLA_UP_REPEAT
+#define BUT_DOWN        PLA_DOWN
+#define BUT_DOWNRPT     PLA_DOWN_REPEAT
+/*define BUT_MARK        PLA_FIRE*/
+#define BUT_COMPASS     (PLA_FIRE | PLA_DOWN)
 
-typedef struct {
-	bool write_to_screen;
-	fig coords[24][80];
-	int maxy, maxx, offy, offx;
-} winder; //attempt to redefine WINDOW; I live in the south :P
+#endif
 
-//let's define some colors
-#define COLOR_BLACK        LCD_RGBPACK(0,0,0)
-#define COLOR_WHITE        LCD_RGBPACK(255,255,255)
-#define COLOR_DARKGRAY     LCD_RGBPACK(128,128,128)
-#define COLOR_LIGHTGRAY    LCD_RGBPACK(192,192,192)
-#define COLOR_RED          LCD_RGBPACK(128,0,0)
-#define COLOR_LIGHTRED     LCD_RGBPACK(255,0,0)
-#define COLOR_DARKYELLOW   LCD_RGBPACK(128,128,0)
-#define COLOR_YELLOW       LCD_RGBPACK(255,255,0)
-#define COLOR_GREEN        LCD_RGBPACK(0,128,0)
-#define COLOR_LIGHTGREN    LCD_RGBPACK(0,255,0)
-#define COLOR_CYAN         LCD_RGBPACK(0,128,128)
-#define COLOR_LIGHTCYAN    LCD_RGBPACK(0,255,255)
-#define COLOR_BLUE         LCD_RGBPACK(0,0,128)
-#define COLOR_LIGHTBLUE    LCD_RGBPACK(0,0,255)
-#define COLOR_PURPLE       LCD_RGBPACK(128,0,128)
-#define COLOR_PINK         LCD_RGBPACK(255,0,255)
-#define COLOR_BROWN        LCD_RGBPACK(128,64,0)
-#define COLOR_LIGHTBROWN   LCD_RGBPACK(255,128,64)
+#ifdef __PLUGINLIB_ACTIONS_H__
+    const struct button_mapping *plugin_contexts[] = {generic_directions, generic_actions};
+#endif
 
-#define COLOR_GROUND	   LCD_RGBPACK(51,51,51)
-#define COLOR_SKY	   LCD_RGBPACK(51,51,102)
-#define COLOR_VISITED	   LCD_RGBPACK(102,51,51)
-#define COLOR_PARA	   LCD_RGBPACK(153,153,102)
-//#define COLOR_PERP	   LCD_RGBPACK(102,51,0)
-#define COLOR_PERP	   LCD_RGBPACK(204,153,102)
+/* Option struct (stolen from clock_menu.c)  */
+static const struct opt_items noyes_text[] = {
+    { "No", -1 },
+    { "Yes", -1 }
+};
 
-enum chrstyle { A_NORMAL, A_WOB_I, A_GOB_I, A_ROB, A_WOBL, A_YOB, A_WOBL_I };
+static const struct opt_items mazesize_text[] = {
+    { "Easy", -1 },
+    { "Medium", -1 },
+    { "Hard", -1 },
+    { "Expert", -1}
+};    
 
-fig SPACE =		{ ' ', A_NORMAL };	/* Space you can walk through */
-fig BLOCK =		{ ' ', A_WOB_I }; 	/* A block that you can't walk through */
-fig OBSPACE =		{ '#', A_GOB_I }; 	/* Obscured space */
-fig VISITED =		{ '.', A_NORMAL };	/* Visited space */
-fig GOAL =		{ '%', A_ROB };		/* Exit from the maze */
-fig START =		{ '+', A_NORMAL };	/* Starting point in the maze */
-//attr_t WIN =		      A_STANDOUT ; //let's make this RED
+bool show_map;
+bool remember_visited;
+bool use_large_tiles;
+int maze_size;
+
+#if LCD_DEPTH == 16
+#define COLOR_GROUND    LCD_RGBPACK(51,51,51)
+#define COLOR_SKY       LCD_RGBPACK(51,51,102)
+#define COLOR_VISITED   LCD_RGBPACK(102,77,51)
+#define COLOR_MARK      LCD_RGBPACK(255,100,61)
+#define COLOR_GOAL      LCD_RGBPACK(128,0,0) /* red */
+#define COLOR_COMPASS   LCD_RGBPACK(255,255,0) /* yellow */
+#define COLOR_PARA      LCD_RGBPACK(153,153,102) /* color side wall */
+/* #define COLOR_PERP   LCD_RGBPACK(102,51,0) */
+#define COLOR_PERP      LCD_RGBPACK(204,153,102) /* color wall perp */
+#elif LCD_DEPTH == 2
+#define COLOR_GROUND    LCD_BLACK
+#define COLOR_SKY       LCD_WHITE
+#define COLOR_VISITED   LCD_DARKGRAY
+#define COLOR_GOAL      LCD_WHITE
+#define COLOR_COMPASS   LCD_WHITE
+#define COLOR_MARK      LCD_WHITE
+#define COLOR_PARA      LCD_DARKGRAY /* color side wall */
+#define COLOR_PERP      LCD_LIGHTGRAY /* color wall perp */
+#else /* mono */
+#define COLOR_GROUND    LCD_BLACK
+#define COLOR_SKY       LCD_BLACK
+#define COLOR_VISITED   LCD_BLACK
+#define COLOR_GOAL      LCD_BLACK
+#define COLOR_COMPASS   LCD_WHITE
+#define COLOR_PARA      LCD_BLACK /* color side wall */
+#define COLOR_PERP      LCD_WHITE /* color wall perp */
+#endif
+
+enum chrstyle { A_DOWN, A_RIGHT, A_UP, A_LEFT, A_NORMAL, A_WOB_I, A_GOB_I, A_ROB, A_WOBL, A_YOB, A_WOBL_I }; 
+
+char SPACE =      ' ';   /* Space you can walk through */
+char BLOCK =      'B';   /* A block that you can't walk through */
+char OBSPACE =    '#';   /* Obscured space */
+char VISITED =    '.';   /* Visited space */
+char GOAL =       '%';   /* Exit from the maze */
+char START =      '+';   /* Starting point in the maze */
 
 enum dir { DIR_DOWN=0, DIR_RIGHT=1, DIR_UP=2, DIR_LEFT=3 };
 #define _TOD(d) (enum dir)((d) % 4)
@@ -89,207 +114,146 @@ enum dir { DIR_DOWN=0, DIR_RIGHT=1, DIR_UP=2, DIR_LEFT=3 };
 #define REVERSE_OF(d) _TOD(_TOI(d) + 2)
 #define RIGHT_OF(d) _TOD(_TOI(d) + 3)
 
-fig VLINE =		{ '|', A_NORMAL };		/* | */
-fig HLINEt =		{ '_', A_WOBL };		/* _ at top */
-fig HLINEb =		{ '_', A_NORMAL };		/* _ at bottom */
-fig DIAG1 =		{ '\\', A_NORMAL };		/* \ */
-fig DIAG2 =		{ '/', A_NORMAL };		/* / */
-fig SKY =		{ ' ', A_WOBL };
-
 static struct { int y, x; } dirtab[4] = 
-	{ { 1, 0 }, { 0, 1 }, { -1, 0 }, { 0, -1 } };
-static fig ptab[4] = {
-	{ 'v', A_YOB }, //let's make these YELLOW
-	{ '>', A_YOB }, 
-	{ '^', A_YOB },
-	{ '<', A_YOB }
-};
-int px, py;		/* Player position */
-enum dir pdir;		/* Player direction */
-fig punder;		/* character under player, if any */
-int sx, sy;		/* Start position */
-int gx, gy;		/* Goal position */
-int gdist;		/* Distance from start to goal */
-int won = 0;		/* Reached goal */
-int cheated = 0;	/* Cheated somehow */
+    { { 1, 0 }, { 0, 1 }, { -1, 0 }, { 0, -1 } };
+static char ptab[4] = { 'v', '>', '^', '<' };
 
-winder map_winder;
-winder umap_winder;
-winder view_winder;
-winder msg_winder;
+int px, py;             /* Player position */
+enum dir pdir;          /* Player direction */
+char punder;             /* character under player, if any */
+int sx, sy;             /* Start position */
+int gx, gy;             /* Goal position */
+int gdist;              /* Distance from start to goal */
+int won = 0;            /* Reached goal */
+int cheated = 0;        /* Cheated somehow */
 
-winder *map;	/* Actual maze */
-winder *umap;	/* Maze map that user sees */
-winder *view;	/* 3D perspective view player sees */
-winder *msg;	/* Message information window */
+#define FIELD_SIZE 80
+#define MAP_CONST 20
 
-int cntr_madeit = 0;
-bool showingmaze = true;
+static char map[FIELD_SIZE * FIELD_SIZE]; /* map storage */
+static char umap[FIELD_SIZE * FIELD_SIZE];
 
-#include "pluginbitmaps/amaze_tiles.h"
+/* rough estimate of visible depth */
+#if LCD_WIDTH > LCD_HEIGHT
+#define MAX_DEPTH  LCD_WIDTH / 25
+#else
+#define MAX_DEPTH  LCD_HEIGHT / 25
+#endif
+/* CX,CY = center of screen */
+#define CX LCD_WIDTH / 2
+#define CY LCD_HEIGHT / 2
 
-#define TILE_WIDTH  BMPWIDTH_amaze_tiles	
-#define TILE_HEIGHT (BMPHEIGHT_amaze_tiles/10)
+int crd_x[MAX_DEPTH + 1], crd_y[MAX_DEPTH + 1]; /* screen vertices */
 
-enum tile_index { t_down=0, t_right=1, t_up=2, t_left=3, t_visited=4,
-		  t_obspace=5, t_goal=6, t_block=7, t_space=8, t_start=9 };
+extern const fb_data amaze_tiles_9[];
+extern const fb_data amaze_tiles_7[];
+#include "pluginbitmaps/amaze_tiles_7.h"
+#include "pluginbitmaps/amaze_tiles_9.h"
 
 /* save file names */
 #define UMAP_FILE PLUGIN_GAMES_DIR "/amaze_umap.sav"
 #define MAP_FILE  PLUGIN_GAMES_DIR "/amaze_map.sav"
+#define PREF_FILE PLUGIN_GAMES_DIR "/amaze_prefs.sav"
 
-//void drawview(void);
-//void mappmove(int, int, enum dir);
-
-//did we make it or eat shit
-void gh(void)
+/* gh - got here */
+void gh (void)
 {
-	int button;
-	
-	rb->splash(HZ, "got here!");
-	cntr_madeit++;
-	button = rb->button_get(true);
+    int button;
+    
+    rb->splash(HZ, "got here!");
+    button = rb->button_get(false);
 }
 
-void clearscreen(void)
+void clearscreen (void)
 {
-	rb->lcd_set_background(COLOR_BLACK);
-	rb->lcd_set_foreground(COLOR_WHITE);
-	rb->lcd_clear_display();
-	rb->lcd_update();
+#if LCD_DEPTH > 1
+    rb->lcd_set_background(LCD_BLACK);
+    rb->lcd_set_foreground(LCD_WHITE);
+#endif
+    rb->lcd_clear_display();
+    rb->lcd_update();
 }
 
-//implement memcopy()
-void *memcpy
-(void *dest, const void *src, size_t n)
+void getmaxyx(int *y, int *x)
 {
-	return rb->memcpy(dest, src, n);
+    *y = (maze_size + 1) * MAP_CONST - 1;
+    *x = (maze_size + 1) * MAP_CONST - 1;
 }
 
-//redefine ncurses getmaxyx
-void
-getmaxyx
-(winder *pane, int *y, int *x)
+void map_write (char *pane, int y, int x, char c)
 {
-	*y = pane->maxy;
-	*x = pane->maxx;
-}
+    int maxy, maxx;
+    
+    getmaxyx(&maxy, &maxx);
 
-//redefine ncurses mvaddch
-void mvwaddch
-(winder *pane, int y, int x, fig c)
-{
-	char outs[2] = {0,0};
-	int chr_mode;
-	int maxy, maxx;
-	
-	outs[0] = c.chr;
+    if (x<0 || x>maxx || y<0 || y>maxy) return;
 
-	getmaxyx(pane, &maxy, &maxx);
-	if (x<0 || x>=maxx || y<0 || y>=maxy) return;
-
-	pane->coords[y][x] = c;
-
-	if (pane->write_to_screen == true) {
-		//use rockbox write
-		rb->lcd_set_foreground(COLOR_WHITE);
-		rb->lcd_set_background(COLOR_BLACK);
-		chr_mode = STYLE_DEFAULT;
-		switch (c.attrib) {
-			case A_NORMAL:
-				break;
-			case A_ROB:
-				rb->lcd_set_foreground(COLOR_RED);
-				break;
-			case A_YOB:
-				rb->lcd_set_foreground(COLOR_YELLOW);
-				break;
-			case A_WOB_I:
-				rb->lcd_set_background(COLOR_WHITE);
-				chr_mode = STYLE_INVERT;
-				break;
-			case A_GOB_I:
-				rb->lcd_set_foreground(COLOR_DARKGRAY);
-				chr_mode = STYLE_INVERT;
-				break;
-			case A_WOBL:
-				rb->lcd_set_background(COLOR_BLUE);
-				break;
-			case A_WOBL_I:
-				rb->lcd_set_background(COLOR_BLUE);
-				chr_mode = STYLE_INVERT;
-				break;
-		}
-		rb->lcd_putsxy((x + pane->offx)*6, (y + pane->offy)*8, outs);
-	}
+    pane[x * FIELD_SIZE + y] = c;
 
 }
-
-//redefine ncurses mvwinch
-fig mvwinch
-(winder *pane, int y, int x)
+char map_read (char *pane, int y, int x)
 {
-	return pane->coords[y][x];
+    int maxy, maxx;
+
+    getmaxyx(&maxy, &maxx);
+    
+    if (x<0 || x>maxx || y<0 || y>maxy) {
+        rb->splash(HZ, "bad read");
+        return SPACE;
+    }    
+
+    return pane[x * FIELD_SIZE + y];
 }
 
-//redefine ncurses werase
-void werase
-(winder *pane)
+/* redefine ncurses werase */
+void werase (char *pane)
 {
-	int y, x;
-	for (y = 0; y < pane->maxy; y++) 
-		for (x = 0; x < pane->maxx; x++)
-			mvwaddch(pane,y,x,SPACE);
+    int y, x;
+    int maxy, maxx;
+
+    getmaxyx(&maxy, &maxx);
+
+    for (y = 0; y <= maxy; y++) 
+        for (x = 0; x <= maxx; x++)
+            map_write(pane, y, x, SPACE);
 }
 
-bool isfigequal
-(fig a, fig b)
-{
-	if (a.chr == b.chr && a.attrib == b.attrib)
-		return true;
-	else
-		return false;
-}
-
-//start of David Leonard's code
+/* start of David Leonard's code */
 
 /* Look at position (y,x) in the maze map */
-fig
-at(int y, int x)
+char at(int y, int x)
 {
-	int maxy, maxx;
+    int maxy, maxx;
 
-	if (y == py && x == px)
-		return punder;
+    getmaxyx(&maxy, &maxx);    
 
-	getmaxyx(map, &maxy, &maxx);
-	if (y < 0 || y >= maxy || x < 0 || x >= maxx)
-		return SPACE;
-	else {
-		return mvwinch(map, y, x);
-	}
+    if (y == py && x == px)
+        return punder; 
+
+    if (y < 0 || y >= maxy || x < 0 || x >= maxx)
+        return SPACE;
+    else {
+        return map_read(map, y, x);
+    }
 }
 
-void
-copyumap(int y, int x, int fullvis)
+void copyumap(int y, int x, int fullvis)
 {
-	fig c;
+    char c;
 
-	c = at(y, x);
-	if (!fullvis && isfigequal(c, SPACE) 
-	  && !isfigequal(mvwinch(umap, y, x), SPACE))
-		c = OBSPACE;
-	mvwaddch(umap, y, x, c);
+    c = at(y, x);
+    if (!fullvis && c == SPACE && map_read(umap, y, x) != SPACE)
+        c = OBSPACE;
+    map_write(umap, y, x, c);
 }
 
 struct path {
-	int y, x;
-	int ttl;		/* Time until this path stops */
-	int spawns;		/* Max number of forks this path can do */
-	int distance;		/* Distance from start */
-	struct path *next;	
+    int y, x;
+    int ttl;        /* Time until this path stops */
+    int spawns;     /* Max number of forks this path can do */
+    int distance;       /* Distance from start */
+    struct path *next;  
 };
-
 
 /*
  * A better maze-digging algorithm.
@@ -298,183 +262,180 @@ struct path {
  * Occasionally a path can fork; thus adding more to the work
  * queue and diversifying the maze.
  */
-void
-eatmaze(int starty, int startx)
+void eatmaze(int starty, int startx)
 {
-	struct path *path_free, *path_head, *path_tail;
-	struct path *p, *s;
-	//moved out per hcs in #rockbox
-	static struct path path_storage[2000];
-	int try;
-	unsigned i;
-	int y, x, dy, dx;
-	int sdir;
+    struct path {
+        int y, x;
+        int ttl;        /* Time until this path stops */
+        int spawns;     /* Max number of forks this path can do */
+        int distance;       /* Distance from start */
+        struct path *next;  
+    };
+    struct path *path_free, *path_head, *path_tail;
+    struct path *p, *s;
+    /* static -- per <hcs> in #rockbox -- was having stack issues */
+    static struct path path_storage[2000];
+    int try;
+    unsigned i;
+    int y, x, dy, dx;
+    int sdir;
 
-	/* Set up the free list of path cells */
-	for (i = 2; i < sizeof path_storage / sizeof path_storage[0]; i++)
-		path_storage[i].next = &path_storage[i-1];
-	path_storage[1].next = NULL;
-	path_free = &path_storage[sizeof path_storage / sizeof path_storage[0] - 1];
+    /* Set up the free list of path cells */
+    for (i = 2; i < sizeof path_storage / sizeof path_storage[0]; i++)
+        path_storage[i].next = &path_storage[i-1];
+    path_storage[1].next = NULL;
+    path_free = &path_storage[sizeof path_storage / sizeof path_storage[0] - 1];
 
-	/* Set up the initial path cell */
-	path_storage[0].y = starty;
-	path_storage[0].x = startx;
-	mvwaddch(map, starty, startx, SPACE);
+    /* Set up the initial path cell */
+    path_storage[0].y = starty;
+    path_storage[0].x = startx;
+    map_write(map, starty, startx, SPACE);
 
-	/* Set up the initial goal. It will move later. */
-	gy = starty;
-	gx = startx;
-	gdist = 0;
+    /* Set up the initial goal. It will move later. */
+    gy = starty;
+    gx = startx;
+    gdist = 0;
 
-	/* Initial properties of the root path */
-	path_storage[0].ttl = 50;
-	path_storage[0].spawns = 20;
-	path_storage[0].distance = 0;
+    /* Initial properties of the root path */
+    path_storage[0].ttl = 50;
+    path_storage[0].spawns = 20;
+    path_storage[0].distance = 0;
 
-	/* Put the initial path into the queue */
-	path_storage[0].next = NULL;
-	path_head = path_tail = &path_storage[0];
+    /* Put the initial path into the queue */
+    path_storage[0].next = NULL;
+    path_head = path_tail = &path_storage[0];
 
-	while (path_head != NULL) {
-		/* Dequeue */
-		p = path_head;
-		path_head = p->next;
-		if (path_head == NULL)
-			path_tail = NULL;
+    while (path_head != NULL) {
+        /* Dequeue */
+        p = path_head;
+        path_head = p->next;
+        if (path_head == NULL)
+            path_tail = NULL;
 
-		/* There's a large chance that some paths miss a turn */
-		if (rb->rand() % 100 < 60)
-			goto requeue;
+        /* There's a large chance that some paths miss a turn */
+        if (rb->rand() % 100 < 60)
+            goto requeue;
 
-		/* First thing we do is advance the path. */
-		y = p->y;
-		x = p->x;
+        /* First thing we do is advance the path. */
+        y = p->y;
+        x = p->x;
 
-		sdir = rb->rand() % 4;
-		for (try = 0; try < 4; try ++) {
-			dx = dirtab[(sdir + try) % 4].x;
-			dy = dirtab[(sdir + try) % 4].y;
+        sdir = rb->rand() % 4;
+        for (try = 0; try < 4; try ++) {
+            dx = dirtab[(sdir + try) % 4].x;
+            dy = dirtab[(sdir + try) % 4].y;
 
-			/* Going back on ourselves? */
-			if (!isfigequal(at(y + dy, x + dx), BLOCK))
-				continue;
+            /* Going back on ourselves? */
+            if (at(y + dy, x + dx) != BLOCK)
+                continue;
 
-			/* Connecting to another path? */
-			if (!isfigequal(at(y + dy * 2, x + dx * 2), BLOCK))
-				continue;
-			if (!isfigequal(at(y + dy + dx, x + dx - dy), BLOCK))
-				continue;
-			if (!isfigequal(at(y + dy - dx, x + dx + dy), BLOCK))
-				continue;
+            /* Connecting to another path? */
+            if (at(y + dy * 2, x + dx * 2) != BLOCK)
+                continue;
+            if (at(y + dy + dx, x + dx - dy) != BLOCK)
+                continue;
+            if (at(y + dy - dx, x + dx + dy) != BLOCK)
+                continue;
 
-			break;
-		}
-		if (try == 4 || p->ttl <= 0) {
-			/* Failed: the path is placed on the free list. */
-			p->next = path_free;
-			path_free = p;
-			continue;
-		}
+            break;
+        }
+        if (try == 4 || p->ttl <= 0) {
+            /* Failed: the path is placed on the free list. */
+            p->next = path_free;
+            path_free = p;
+            continue;
+        }
 
-		/* Dig the path a bit */
-		p->y = y + dy;
-		p->x = x + dx;
-		mvwaddch(map, p->y, p->x, SPACE);
-		p->ttl--;
-		p->distance++;
+        /* Dig the path a bit */
+        p->y = y + dy;
+        p->x = x + dx;
+        map_write(map, p->y, p->x, SPACE);
+        p->ttl--;
+        p->distance++;
 
-		if (p->distance > gdist) {
-			gx = p->x;
-			gy = p->y;
-			gdist = p->distance;
-		}
+        if (p->distance > gdist) {
+            gx = p->x;
+            gy = p->y;
+            gdist = p->distance;
+        }
 
-		/* Decide if we should spawn */
-		if (/* rb->rand() % (p->ttl + 1) < p->spawns && */ path_free) {
-			/* Take a new path element off the free list */
-			s = path_free;
-			path_free = s->next;
+        /* Decide if we should spawn */
+        if (/* rb->rand() % (p->ttl + 1) < p->spawns && */ path_free) {
+            /* Take a new path element off the free list */
+            s = path_free;
+            path_free = s->next;
 
-			/* Insert it at the tail of the queue */
-			s->next = NULL;
-			if (path_tail) path_tail->next = s;
-			else           path_head = s;
-			path_tail = s;
+            /* Insert it at the tail of the queue */
+            s->next = NULL;
+            if (path_tail) path_tail->next = s;
+            else           path_head = s;
+            path_tail = s;
 
-			/* Newly spawned path s will inherit most properties from p */
-			s->y = p->y;
-			s->x = p->x;
-			s->ttl = p->ttl + rb->rand() % 10;
-			s->spawns = p->spawns;
-			s->distance = p->distance;
+            /* Newly spawned path s will inherit most properties from p */
+            s->y = p->y;
+            s->x = p->x;
+            s->ttl = p->ttl + rb->rand() % 10;
+            s->spawns = p->spawns;
+            s->distance = p->distance;
 
-			/* p->spawns--; */
-		}
+            /* p->spawns--; */
+        }
 
-	requeue:
-		/* Put p onto the tail of the queue */
-		p->next = NULL;
-		if (path_tail) path_tail->next = p;
-		else           path_head = p;
-		path_tail = p;
-	}
+    requeue:
+        /* Put p onto the tail of the queue */
+        p->next = NULL;
+        if (path_tail) path_tail->next = p;
+        else           path_head = p;
+        path_tail = p;
+    }
 }
 
 /* Move the player to a new position/direction in the maze map */
-void
-mappmove(int newpy, int newpx, enum dir newpdir)
+void mappmove(int newpy, int newpx, enum dir newpdir)
 {
-	mvwaddch(map, py, px, punder);
-	copyumap(py, px, 1);
-	punder = at(newpy, newpx);
-	py = newpy;
-	px = newpx;
-	pdir = newpdir;
-	copyumap(py, px, 1);
-	mvwaddch(umap, py, px, ptab[(int)pdir]);
-//	wmove(umap, 0, 0);     not necessary
-//	wnoutrefresh(umap);    will do below
-	rb->lcd_update();
+    map_write(map, py, px, punder);
+    copyumap(py, px, 1);
+    punder = at(newpy, newpx);
+    py = newpy;
+    px = newpx;
+    pdir = newpdir;
+    copyumap(py, px, 1);
+    map_write(umap, py, px, ptab[(int)pdir]);
+    rb->lcd_update();
 }
 
-void
-clearmap 
-(winder *amap)
+void clearmap (char *amap)
 {
-	int maxy, maxx;
-	int y, x;
+    int maxy, maxx;
+    int y, x;
 
-	getmaxyx(map, &maxy, &maxx);
+    getmaxyx(&maxy, &maxx);
 
-	//werase(&amap);  //clear window
 
-	for (y = 0; y < maxy; y++)
-		for (x = 0; x < maxx; x++)
-			mvwaddch(amap, y, x, BLOCK);
+    for (y = 0; y < maxy; y++)
+        for (x = 0; x < maxx; x++)
+            map_write(amap, y, x, BLOCK);
 }
 
 /* Reveal the solution to the user */
-void
-showmap(void)
+void showmap(void)
 {
-	int maxy, maxx, y, x;
-	fig ch, och;
+    int maxy, maxx, y, x;
+    char ch, och;
 
-	getmaxyx(umap, &maxy, &maxx);
-	for (y = 0; y < maxy; y++)
-		for (x = 0; x < maxx; x++) {
-			ch = at(y, x);
-			if (isfigequal(ch, SPACE)) {
-				och = mvwinch(umap, y, x);
-				if (isfigequal(och, BLOCK)
-				|| isfigequal(och, OBSPACE))
-					ch = OBSPACE;
-			}
-			mvwaddch(umap, y, x, ch);
-		}
-	mvwaddch(umap, py, px, ptab[(int)pdir]);
-//	wnoutrefresh(umap);
-	rb->lcd_update();
+    getmaxyx(&maxy, &maxx);
+    for (y = 0; y < maxy; y++)
+        for (x = 0; x < maxx; x++) {
+            ch = at(y, x);
+            if (ch == SPACE) {
+                och = map_read(umap, y, x);
+                if (och == BLOCK || och == OBSPACE)
+                    ch = OBSPACE;
+            }
+            map_write(umap, y, x, ch);
+        }
+    map_write(umap, py, px, ptab[(int)pdir]);
+    rb->lcd_update();
 }
 
 /*
@@ -485,1167 +446,1147 @@ showmap(void)
  * of all possible points where the path could fork. Later on try those
  * possible branches; put limits on the segment lengths etc.
  */
-void
-makemaze(void)
+void makemaze(void)
 {
-	int maxy, maxx;
-	int i;
+    int maxy, maxx;
+    int i;
 
-	/* Get the window dimensions */
-	getmaxyx(map, &maxy, &maxx);
+    /* Get the window dimensions */
+    getmaxyx(&maxy, &maxx);
 
-	clearmap(map);
+    clearmap(map);
 
-	py = rb->rand() % (maxy - 2) + 1; /* maxy/2 */
-	px = rb->rand() % (maxx - 2) + 1; /* maxx/2 */
-	
-	eatmaze(py, px);
-	
-	sx = px; /* starting position */
-	sy = py;
+    py = rb->rand() % (maxy - 2) + 1; /* maxy/2 */
+    px = rb->rand() % (maxx - 2) + 1; /* maxx/2 */
+    
+    eatmaze(py, px);
+    
+    sx = px; /* starting position */
+    sy = py;
 
-	/* Face in an interesting direction: */
-	pdir = DIR_UP;
-	for (i = 0; 
-	     i < 4 && isfigequal(at(py + dirtab[pdir].y, 
-			     	 px + dirtab[pdir].x), BLOCK);
-	     i++)
-		pdir = LEFT_OF(pdir);
+    /* Face in an interesting direction: */
+    pdir = DIR_UP;
+    for (i = 0; 
+         i < 4 && at(py + dirtab[pdir].y, 
+                     px + dirtab[pdir].x) == BLOCK;
+         i++)
+        pdir = LEFT_OF(pdir);
 
-	mvwaddch(map, py, px, START);
-	mvwaddch(map, gy, gx, GOAL);
-	punder = START;
-	mappmove(py, px, pdir);
+    map_write(map, py, px, START);
+    map_write(map, gy, gx, GOAL);
+    punder = START;
+    mappmove(py, px, pdir);
 }
 
-/* 
- * Position of the start of a vertical block edge
- * Also used for horizontal edges
- *
- * ___
- *  h |\h
- *    | \	f = front
- * f  | s 	s = side
- *    |         v = vertical edge
- *    v /       h = horizontal edge
- * ___|/
- */
-#define MAXDIST 6
-static int barx[MAXDIST + 2] = { -1, 3, 9, 13, 17, 19, 21, 21 };
-static int bary[MAXDIST + 2] = { 0, 2, 5,  7,  9, 10, 11, 11 };
+/* new drawing routines */
 
-/* Draw the close vertical edge of a block */
-void
-draw_vert_edge(int dist, int right)
+void draw_arrow(int dir, int sx, int sy, int pass)
 {
-	int y;
-	for (y = bary[dist]; y <= 22 - bary[dist]; y++)
-		if (right)
-			mvwaddch(view, y, 43 - barx[dist], VLINE);
-		else
-			mvwaddch(view, y, barx[dist], VLINE);
+    if (pass > 2) return;
+
+    rb->lcd_fillrect(sx, sy, 1, 1);
+    switch(dir) {
+        case 0: /* down */
+            rb->lcd_fillrect(sx + 2*pass, sy, 1, 1);
+            draw_arrow(dir, sx - 1, sy - 1, pass + 1);
+            break;
+        case 2: /* up */
+            rb->lcd_fillrect(sx + 2*pass, sy, 1, 1);
+            draw_arrow(dir, sx - 1, sy + 1, pass + 1);
+            break;
+        case 1: /* left */
+            rb->lcd_fillrect(sx, sy + 2*pass, 1, 1);
+            draw_arrow(dir, sx + 1, sy - 1, pass + 1);
+            break;
+        case 3: /* right */
+            rb->lcd_fillrect(sx, sy + 2*pass, 1, 1);
+            draw_arrow(dir, sx - 1, sy - 1, pass +1);
+            break;
+    }
 }
 
-/* Draw the horizontal edge of a block */
-void
-draw_horiz_front(int dist, int right)
+void draw_pointer(int dir, bool is_compass)
 {
-	int x;
+/* Provide a compass pointing 'north' */
+int offset = 0;
 
-	for (x = barx[dist-1] + 1; x < barx[dist]; x++)
-		if (right) {
-			mvwaddch(view, bary[dist] - 1, 43 - x, HLINEt);
-			mvwaddch(view, 22 - bary[dist], 43 - x, HLINEb);
-		} else {
-			mvwaddch(view, bary[dist] - 1, x, HLINEt);
-			mvwaddch(view, 22 - bary[dist], x, HLINEb);
-		}
+if(!is_compass) offset = crd_y[1]/2;
+
+#if LCD_DEPTH > 1
+    if(is_compass)
+        rb->lcd_set_foreground(COLOR_COMPASS);
+    else
+        rb->lcd_set_foreground(COLOR_MARK);
+#else
+    rb->lcd_set_drawmode(DRMODE_SOLID|DRMODE_INVERSEVID);
+#endif
+    switch(dir) {
+        case 0: /* point down */
+            draw_arrow(dir, CX - 1, CY + offset + 6, 0);
+            rb->lcd_fillrect(CX - 1, CY + offset + 1, 1, 3);
+            break;
+        case 2: /* point up */
+            draw_arrow(dir, CX - 1, CY + offset, 0);
+            rb->lcd_fillrect(CX - 1, CY + offset + 3, 1, 3);
+            break;
+        case 1: /* point left */
+            draw_arrow(dir, CX - 6, CY + offset + 6, 0);
+            rb->lcd_fillrect(CX - 3, CY + offset + 6, 3, 1);
+            break;  
+        case 3: /* point right */
+            draw_arrow(dir, CX + 1, CY + offset + 6, 0);
+            rb->lcd_fillrect(CX - 4, CY + offset + 6, 3, 1);
+            break;
+    }
+#if LCD_DEPTH == 1
+    rb->lcd_set_drawmode(DRMODE_SOLID);
+#endif
+    rb->lcd_update();
 }
 
-/* Draw the horiz edge of a wall in the way */
-void
-draw_horiz_wall(int dist)
+void draw_end_wall(int bx, int by)
 {
-	int x;
-	for (x = barx[dist] + 1; x <= 43 - (barx[dist] + 1); x++) {
-		mvwaddch(view, bary[dist] - 1, x, HLINEt);
-		mvwaddch(view, 22 - (bary[dist]), x, HLINEb);
-	}
+#if LCD_DEPTH > 1
+    rb->lcd_set_foreground(COLOR_PERP);
+    rb->lcd_fillrect(CX - bx/2, CY - by/2, bx + 1, by);
+#else
+    rb->lcd_drawrect(CX - bx/2, CY - by/2, bx + 1, by);
+#endif
 }
 
-/* Draw the (visually) diagonal edge of a block */
-void 
-draw_horiz_side(int dist, int right)
+void draw_side(int fx, int bx, int by, int tan_n, int tan_d, bool isleft)
 {
-	int y, x;
+    int i;
+    int signx;
 
-	for (y = bary[dist], x = barx[dist] + 1; x < barx[dist + 1]; y++, x+=2)
-		if (right) {
-			mvwaddch(view, y, 43 - x, DIAG2);
-			mvwaddch(view, 22 - y, 43 - x, DIAG1);
-		} else {
-			mvwaddch(view, y, x, DIAG1);
-			mvwaddch(view, 22 - y, x, DIAG2);
-		}
+    if(isleft)
+        signx = -1;
+    else {
+        signx = 1;
+    }
+    
+#if LCD_DEPTH > 1
+    for(i = bx; i < fx + 1; i++) {
+        /* add some stripes */
+        if(i % 3 == 0)
+            rb->lcd_set_foreground(COLOR_PERP);
+        else
+            rb->lcd_set_foreground(COLOR_PARA);
+        rb->lcd_vline(CX + signx * i/2,
+                 CY - tan_n * (i-bx)/2 / tan_d - by/2,
+                 CY + tan_n * (i-bx)/2 / tan_d + by/2);
+    }
+#else
+    rb->lcd_vline(CX + signx * bx/2,
+             CY - by/2,
+             CY + by/2);
+    rb->lcd_vline(CX + signx * (fx + 1)/2,
+             CY - tan_n * (fx - bx + 1)/2 / tan_d - by/2,
+             CY + tan_n * (fx - bx + 1)/2 / tan_d + by/2);
+    rb->lcd_drawline(CX + signx * bx/2,
+             CY - by/2,
+             CX + signx * (fx + 1)/2,
+             CY - tan_n * (fx - bx + 1)/2 / tan_d - by/2);
+    rb->lcd_drawline(CX + signx * bx/2,
+             CY + by/2,
+             CX + signx * (fx + 1)/2,
+             CY + tan_n * (fx - bx + 1)/2 / tan_d + by/2);
+#endif
 }
 
-/* Draw the floor in the centre of view */
-void
-draw_floor_centre(int dist, fig ch)
+void draw_hall(int fx, int bx, int by, bool isleft)
 {
-	int y, x, xx;
+#if LCD_DEPTH > 1
+    rb->lcd_set_foreground(COLOR_PERP);
 
-	for (y = bary[dist], x = barx[dist] + 1; x < barx[dist + 1]; y++, x+=2)
-		for (xx = x + 1; xx <= 43 - (x + 1); xx++) {
-			mvwaddch(view, y, xx, SKY);
-			mvwaddch(view, 22 - y, xx, ch);
-		}
-}
-
-/* Draw the floor to the side */
-void
-draw_floor_side(int dist, int right, fig ch)
-{
-	int y, x, xx;
-
-	for (y = bary[dist], x = barx[dist] + 1; x < barx[dist + 1]; y++, x+=2)
-		for (xx = barx[dist]; xx <= x; xx++)
-			if (right) {
-				mvwaddch(view, y, 43 - xx, SKY);
-				mvwaddch(view, 22 - y, 43 - xx, ch);
-			} else {
-				mvwaddch(view, y, xx, SKY);
-				mvwaddch(view, 22 - y, xx, ch);
-			}
-}
-
-/* Draw the view the player would see */
-void
-drawview(void)
-{
-	int dist;
-	int dx, dy, x, y;
-	int a, l, la, r, ra;
-	fig g, gl, gr;
-	int lastdist;
-
-	fig dir_ind[6] = { 
-			{ '^', A_YOB },
-			{ 'v', A_YOB },
-			{ '>', A_YOB },
-			{ '<', A_YOB },
-			{ '|', A_YOB },
-			{ '-', A_YOB }
-	};
-
-	showingmaze = true;
-
-	if (!show_map) {
-		clearmap(umap);
-		copyumap(gy, gx, 1);
-	}
-
-	dx = dirtab[(int)pdir].x;
-	dy = dirtab[(int)pdir].y;
-
-	for (dist = 1; dist < MAXDIST; dist++)
-		if (isfigequal(at(py + dy * dist, px + dx * dist), BLOCK))
-			break;
-	lastdist = dist - 1;
-	werase(view);
-	clearscreen();
-	while (--dist >= 0) {
-		x = px + dx * dist;
-		y = py + dy * dist;
-
-		/* XXX only looks one cell to the side */
-
-		/* ahead */
-		a = (isfigequal(at(y + dy, x + dx), BLOCK));
-		/* to the left */
-		l = (isfigequal(at(y - dx, x + dy), BLOCK));
-		/* left, ahead */
-		la = (isfigequal(at(y - dx + dy, x + dy + dx), BLOCK));
-		/* to the right */
-		r = (isfigequal(at(y + dx, x - dy), BLOCK));
-		/* right, ahead */
-		ra = (isfigequal(at(y + dx + dy, x - dy + dx), BLOCK));
-		/* floor */
-		g = at(y, x);
-		gl = at(y - dx, x + dy);
-		gr = at(y + dx, x - dy);
-
-		if (dist == lastdist) {
-			
-			if (a || la) draw_vert_edge(dist +1, 0);
-			if (a || ra) draw_vert_edge(dist +1, 1);
-		}
-
-		if (!isfigequal(g, BLOCK))
-			draw_floor_centre(dist, g);
-		if (!isfigequal(gl, BLOCK))
-			draw_floor_side(dist, 0, gl);
-		if (!isfigequal(gr, BLOCK))
-			draw_floor_side(dist, 1, gr);
-
-		if (l) {
-			draw_horiz_side(dist, 0);
-			if (dist != 0) draw_vert_edge(dist, 0);
-			draw_vert_edge(dist + 1, 0);
-		}
-		if (r)  {
-			draw_horiz_side(dist, 1);
-			if (dist != 0) draw_vert_edge(dist, 1);
-			draw_vert_edge(dist + 1, 1);
-		}
-
-		if (!l && la)
-			draw_horiz_front(dist + 1, 0);
-		if (!r && ra)
-			draw_horiz_front(dist + 1, 1);
-		if (a) {
-			draw_horiz_wall(dist + 1);
-		}
-
-		copyumap(y + dy, x + dx, 0);	// ahead
-		copyumap(y, x, 1);		// here 
-		copyumap(y - dx, x + dy, 0);	// left 
-		copyumap(y + dx, x - dy, 0);	// right
-		if (!l)
-			copyumap(y - dx + dy, x + dy + dx, 0);	// left ahead
-		if (!r)
-			copyumap(y + dx + dy, x - dy + dx, 0);	// right ahead
-	}
-
-	if (show_compass) {
-		/* Provide a compass pointing 'north' */
-
-		switch (pdir) {
-		case DIR_UP:
-			mvwaddch(view, 21, 21, dir_ind[0]); // ^
-			mvwaddch(view, 22, 21, dir_ind[4]); // |
-			break;
-		case DIR_DOWN:
-			mvwaddch(view, 21, 21, dir_ind[4]); // |
-			mvwaddch(view, 22, 21, dir_ind[1]); // v
-			break;
-		case DIR_LEFT:
-			mvwaddch(view, 21, 21, dir_ind[5]); // -
-			mvwaddch(view, 21, 22, dir_ind[2]); // >
-			break;
-		case DIR_RIGHT:
-			mvwaddch(view, 21, 20, dir_ind[3]); // <
-			mvwaddch(view, 21, 21, dir_ind[5]); // -
-			break;
-		}
-	}
-
-	rb->lcd_update();
-	mvwaddch(umap, py, px, ptab[(int)pdir]);
-}
-
-//new drawing routines
-//CX,CY = center of screen
-#define MAX_DEPTH 7
-#define MAXX 319
-#define MAXY 239
-#define CX MAXX / 2
-#define CY MAXY / 2
-
-void draw_end_wall(int bx, int by) {
-	rb->lcd_set_foreground(COLOR_PERP);
-	rb->lcd_fillrect(CX - bx/2, CY - by/2, bx, by);
-}
-
-void draw_side(int fx, int bx, int by, int tan_n, int tan_d, bool isleft) {
-	int i;
-	int signx;
-
-	//rb->lcd_set_foreground(COLOR_PARA);
-
-	if(isleft) signx = -1; else signx = 1;
-	
-	for(i = bx; i < fx + 1; i++) {
-		//add some stripes
-		if(i % 3 == 0)
-			rb->lcd_set_foreground(COLOR_PERP);
-		else
-			rb->lcd_set_foreground(COLOR_PARA);
-		rb->lcd_drawline(CX + signx * i/2,
-				 CY - tan_n * (i-bx)/2 / tan_d - by/2,
-				 CX + signx * i/2,
-				 CY + tan_n * (i-bx)/2 / tan_d + by/2);
-	}
-}
-
-void draw_hall(int fx, int bx, int by, bool isleft) {
-
-	rb->lcd_set_foreground(COLOR_PERP);
-
-	if(isleft)
-		rb->lcd_fillrect(CX - fx/2, CY - by/2, (fx - bx)/2 + 1, by);
-	else
-		rb->lcd_fillrect(CX + bx/2, CY - by/2, (fx - bx)/2 + 1, by);
+    if(isleft)
+        rb->lcd_fillrect(CX - fx/2, CY - by/2, (fx - bx)/2 + 1, by);
+    else
+        rb->lcd_fillrect(CX + bx/2, CY - by/2, (fx - bx)/2 + 1, by);
+#else
+    if(isleft)
+        rb->lcd_drawrect(CX - fx/2, CY - by/2, (fx - bx)/2 + 1, by);
+    else
+        rb->lcd_drawrect(CX + bx/2, CY - by/2, (fx - bx)/2 + 1, by);
+#endif
 }
 
 void draw_side_tri(int fx, int fy, int bx, int tan_n, int tan_d,
-		   bool isvisited, bool isgoal) {
-	int i;
-	int signx, signy;
+           bool isvisited, bool isgoal)
+{
+    int i;
+    int signx, signy;
 
-	signy = 1;
-	
-	while(signy >= -1) {
-		if(signy == 1)
-			if(isgoal)
-				rb->lcd_set_foreground(COLOR_RED);
-			else if(isvisited)
-				rb->lcd_set_foreground(COLOR_VISITED);
-			else //if(!isvisited)
-				rb->lcd_set_foreground(COLOR_GROUND);
-		else
-			rb->lcd_set_foreground(COLOR_SKY);
-		
-		signx = 1;
-		
-		while(signx >= -1) {
-			for(i = fx; i > bx; i--) 
-				rb->lcd_drawline(CX + signx * i/2,
-						 CY + signy * fy/2,
-						 CX + signx * i/2,
-						 CY + signy * fy/2
-						    + signy * tan_n
-						    * (i - fx)/2 / tan_d);
-			signx-=2;
-		}
-		signy-=2;
-	}
+    signy = 1;
+    
+    while(signy >= -1) {
+#if LCD_DEPTH > 1
+        if(signy == 1)
+            if(isgoal)
+                rb->lcd_set_foreground(COLOR_GOAL);
+            else if(isvisited)
+                rb->lcd_set_foreground(COLOR_VISITED);
+            else 
+                rb->lcd_set_foreground(COLOR_GROUND);
+        else
+            rb->lcd_set_foreground(COLOR_SKY);
+#endif
+        
+        signx = 1;
+        
+        while(signx >= -1) {
+            for(i = fx; i > bx; i--) 
+                rb->lcd_vline(CX + signx * i/2,
+                         CY + signy * fy/2,
+                         CY + signy * fy/2
+                            + signy * tan_n
+                            * (i - fx)/2 / tan_d);
+            signx-=2;
+        }
+        signy-=2;
+    }
 }
 
 void draw_hall_crnr(int fx, int fy, int bx, int by, 
-		    bool isleft, bool isvisited, bool isgoal) {
-	
-	rb->lcd_set_foreground(COLOR_SKY);
-	if(isleft)
-		rb->lcd_fillrect(CX - fx/2, CY - fy/2,
-				 (fx - bx)/2 + 1, (fy - by)/2);
-	else
-		rb->lcd_fillrect(CX + bx/2, CY - fy/2,
-				 (fx - bx)/2 + 1, (fy - by)/2);
-	
-	if(isgoal)
-		rb->lcd_set_foreground(COLOR_RED);
-	else if(isvisited)
-		rb->lcd_set_foreground(COLOR_VISITED);
-	else
-		rb->lcd_set_foreground(COLOR_GROUND);
+            bool isleft, bool isvisited, bool isgoal)
+{
+#if LCD_DEPTH > 1   
+    rb->lcd_set_foreground(COLOR_SKY);
+#endif
+    if(isleft)
+        rb->lcd_fillrect(CX - fx/2, CY - fy/2,
+                 (fx - bx)/2 + 1, (fy - by)/2);
+    else
+        rb->lcd_fillrect(CX + bx/2, CY - fy/2,
+                 (fx - bx)/2 + 1, (fy - by)/2);
+    
+#if LCD_DEPTH > 1
+    if(isgoal)
+        rb->lcd_set_foreground(COLOR_GOAL);
+    else if(isvisited)
+        rb->lcd_set_foreground(COLOR_VISITED);
+    else
+        rb->lcd_set_foreground(COLOR_GROUND);
+#endif
 
-	if(isleft)
-		rb->lcd_fillrect(CX - fx/2, CY + by/2,
-				 (fx - bx)/2 + 1, (fy - by)/2);
-	else
-		rb->lcd_fillrect(CX + bx/2, CY + by/2,
-				 (fx - bx)/2 + 1, (fy - by)/2);
+    if(isleft)
+        rb->lcd_fillrect(CX - fx/2, CY + by/2,
+                 (fx - bx)/2 + 1, (fy - by)/2);
+    else
+        rb->lcd_fillrect(CX + bx/2, CY + by/2,
+                 (fx - bx)/2 + 1, (fy - by)/2);
 }
 
-void draw_center_sq(int fy, int bx, int by, bool isvisited, bool isgoal) {
-	rb->lcd_set_foreground(COLOR_SKY);
-	rb->lcd_fillrect(CX - bx/2, CY - fy/2, bx, (fy - by)/2);
+void draw_center_sq(int fy, int bx, int by, bool isvisited, bool isgoal,
+                    bool isfront, int chr)
+{
+    chr = chr - '0'; /* get the integer value */
+        
+#if LCD_DEPTH > 1
+    rb->lcd_set_foreground(COLOR_SKY);
+#endif
+    rb->lcd_fillrect(CX - bx/2, CY - fy/2, bx, (fy - by)/2);
 
-	if(isgoal)
-		rb->lcd_set_foreground(COLOR_RED);
-	else if(isvisited)
-		rb->lcd_set_foreground(COLOR_VISITED);
-	else
-		rb->lcd_set_foreground(COLOR_GROUND);
-	rb->lcd_fillrect(CX - bx/2, CY + by/2, bx, (fy - by)/2 + 1);
+#if LCD_DEPTH > 1
+    if(isgoal)
+        rb->lcd_set_foreground(COLOR_GOAL);
+    else if(isvisited)
+        rb->lcd_set_foreground(COLOR_VISITED);
+    else
+        rb->lcd_set_foreground(COLOR_GROUND);
+#endif
+    rb->lcd_fillrect(CX - bx/2, CY + by/2, bx, (fy - by)/2 + 1);
+
+    if(isvisited && chr >= 0 && chr <= 3) {
+#if LCD_DEPTH > 1
+        rb->lcd_set_foreground(COLOR_MARK);
+#else
+        rb->lcd_set_drawmode(DRMODE_SOLID|DRMODE_INVERSEVID);
+#endif
+        if(isfront) { /* cell is marked in front, draw arrow */
+            if          (chr == ((int)(pdir) + 3) % 4)
+                draw_pointer(DIR_LEFT, false);
+            else if     (chr == ((int)(pdir) + 1) % 4)
+                draw_pointer(DIR_RIGHT, false);
+            else if     (chr == ((int)(pdir) + 2) % 4)
+                draw_pointer(DIR_DOWN, false);
+            else /* same direction */
+                draw_pointer(DIR_UP, false);
+        }
+        else /* cell is marked but is in distance */
+            rb->lcd_fillrect(CX, CY + (fy + by)/4, 2, 2);
+#if LCD_DEPTH == 1
+        rb->lcd_set_drawmode(DRMODE_SOLID);
+#endif
+    }
 }
 
-void draw_arrow(int sx, int sy, int pass) {
-	if (pass > 2) return;
-	
-	rb->lcd_fillrect(sx, sy, 2, 2);
-	switch(pdir) {
-		case 0: //down
-			rb->lcd_fillrect(sx + 2*pass, sy, 2, 2);
-			draw_arrow(sx - 1, sy - 2, pass + 1);
-			break;
-		case 2: //up
-			rb->lcd_fillrect(sx + 2*pass, sy, 2, 2);
-			draw_arrow(sx - 1, sy + 2, pass + 1);
-			break;
-		case 1: //left
-			rb->lcd_fillrect(sx, sy + 2*pass, 2, 2);
-			draw_arrow(sx + 2, sy - 1, pass + 1);
-			break;
-		case 3: //right
-			rb->lcd_fillrect(sx, sy + 2*pass, 2, 2);
-			draw_arrow(sx - 2, sy - 1, pass +1);
-			break;
-	}
-}	
+bool is_visited(char cell)
+{
+    if (cell - '0' >= 0 && cell - '0' <= 3)
+        return true;
+    else if (cell == VISITED)
+        return true;
+    else
+        return false;
+}
 
-void graphic_view(void) {
-	int dist, lastdist;
-	int x, y, dx, dy;
-	int i;
-	int a, l, r;
-	int crd_x[MAX_DEPTH + 1], crd_y[MAX_DEPTH + 1];
-	bool g, gl, gr;
-	bool e, el, er;
-	int tan_n, tan_d; // tangent numerator/denominator
-	
-	dx = dirtab[(int)pdir].x;
-	dy = dirtab[(int)pdir].y;
+void graphic_view(void)
+{
+    int dist, lastdist;
+    int x, y, dx, dy;
+    int a, l, r; /* is block? ahead/left/right */
+    bool g, gl, gr; /* ground visted? under/left/right */
+    bool e, el, er; /* is goal? under/left/right */
+    int tan_n, tan_d; /* tangent numerator/denominator */
+    
+    dx = dirtab[(int)pdir].x;
+    dy = dirtab[(int)pdir].y;
 
-	crd_x[0] = MAXX + 1;
-	crd_y[0] = MAXY + 1;
-	for (i=1; i < MAX_DEPTH + 1; i++) {
-		crd_x[i] = crd_x[i-1]*2/3;
-		if(crd_x[i] % 2 != 0) crd_x[i]++;
-		crd_y[i] = crd_y[i-1]*2/3;
-		if(crd_y[i] % 2 != 0) crd_y[i]++;
-	}
+    for (dist = 1; dist < MAX_DEPTH; dist++)
+        if (at(py + dy * dist, px + dx * dist) == BLOCK)
+            break;
+    lastdist = dist - 1;
+    
+    if (!show_map) {
+        clearmap(umap);
+        copyumap(gy, gx, 1);
+    }
 
-	for (dist = 1; dist < MAX_DEPTH; dist++)
-		if (isfigequal(at(py + dy * dist, px + dx * dist), BLOCK))
-			break;
-	lastdist = dist - 1;
-	
-	if (!show_map) {
-		clearmap(umap);
-		copyumap(gy, gx, 1);
-	}
-	
-	//clearscreen();
+#if LCD_DEPTH == 1
+    clearscreen();
+#endif
 
-	while (--dist >= 0) {
-		x = px + dx * dist;
-		y = py + dy * dist;
-		
-		/* ground */
-		g = isfigequal(at(y, x), VISITED);
-		gl = isfigequal(at(y - dx, x + dy), VISITED);
-		gr = isfigequal(at(y + dx, x - dy), VISITED);
-		e = isfigequal(at(y, x), GOAL);
-		el = isfigequal(at(y - dx, x + dy), GOAL);
-		er = isfigequal(at(y + dx, x - dy), GOAL);
+    while (--dist >= 0) {
+        x = px + dx * dist;
+        y = py + dy * dist;
+        
+        /* ground */
+        g = is_visited(at(y, x));
+        gl = is_visited(at(y - dx, x + dy));
+        gr = is_visited(at(y + dx, x - dy));
+        /* goal/end */
+        e = at(y, x) == GOAL;
+        el = at(y - dx, x + dy) == GOAL;
+        er = at(y + dx, x - dy) == GOAL;
+        /* ahead */
+        a = at(y + dy, x + dx) == BLOCK;
+        /* to the left */
+        l = at(y - dx, x + dy) == BLOCK;
+        /* to the right */
+        r = at(y + dx, x - dy) == BLOCK;
 
-		/* ahead */
-		a = isfigequal(at(y + dy, x + dx), BLOCK);
-		/* to the left */
-		l = isfigequal(at(y - dx, x + dy), BLOCK);
-		/* to the right */
-		r = isfigequal(at(y + dx, x - dy), BLOCK);
+        tan_n = crd_y[dist] - crd_y[dist+1]; 
+        tan_d = crd_x[dist] - crd_x[dist+1];
+        
+        if (a)
+            draw_end_wall(crd_x[dist+1], crd_y[dist+1]);
+        if (l) {
+            draw_side(crd_x[dist], crd_x[dist+1],
+                    crd_y[dist+1], tan_n, tan_d, true);
+        }
+        else {
+            draw_hall(crd_x[dist], crd_x[dist+1],
+                    crd_y[dist+1], true);
+            draw_hall_crnr(crd_x[dist], crd_y[dist], crd_x[dist+1],
+                    crd_y[dist+1], true, gl, el);
+        }
+        if (r) {
+            draw_side(crd_x[dist], crd_x[dist+1],
+                    crd_y[dist+1], tan_n, tan_d, false);
+        }
+        else {
+            draw_hall(crd_x[dist], crd_x[dist+1],
+                    crd_y[dist+1], false);
+            draw_hall_crnr(crd_x[dist], crd_y[dist],
+                    crd_x[dist+1], crd_y[dist+1], false, gr, er);
+        }
+        
+        draw_center_sq(crd_y[dist], crd_x[dist+1], crd_y[dist+1],
+                    g, e, dist==0, (int)(at(y, x)));
+        draw_side_tri(crd_x[dist], crd_y[dist],
+                    crd_x[dist+1], tan_n, tan_d, g, e);
 
-		tan_n = crd_y[dist] - crd_y[dist+1]; 
-		tan_d = crd_x[dist] - crd_x[dist+1];
-		
-		if (a)
-			draw_end_wall(crd_x[dist+1], crd_y[dist+1]);
-		if (l) {
-			draw_side(crd_x[dist], crd_x[dist+1],
-				  crd_y[dist+1], tan_n, tan_d, true);
-		}
-		else {
-			draw_hall(crd_x[dist], crd_x[dist+1],
-				  crd_y[dist+1], true);
-			draw_hall_crnr(crd_x[dist], crd_y[dist],
-				       crd_x[dist+1], crd_y[dist+1],
-				       true, gl, el);
-		}
-		if (r) {
-			draw_side(crd_x[dist], crd_x[dist+1],
-				  crd_y[dist+1], tan_n, tan_d, false);
-		}
-		else {
-			draw_hall(crd_x[dist], crd_x[dist+1],
-				  crd_y[dist+1], false);
-			draw_hall_crnr(crd_x[dist], crd_y[dist],
-				       crd_x[dist+1], crd_y[dist+1],
-				       false, gr, er);
-		}
-		
-		draw_center_sq(crd_y[dist],
-			       crd_x[dist+1], crd_y[dist+1], g, e);
-		draw_side_tri(crd_x[dist], crd_y[dist],
-			      crd_x[dist+1],
-			      tan_n, tan_d, g, e);
-
-		copyumap(y + dy, x + dx, 0);	// ahead
-		copyumap(y, x, 1);		// here 
-		copyumap(y - dx, x + dy, 0);	// left 
-		copyumap(y + dx, x - dy, 0);	// right
-		if (!l)
-			copyumap(y - dx + dy, x + dy + dx, 0);	// left ahead
-		if (!r)
-			copyumap(y + dx + dy, x - dy + dx, 0);	// right ahead
-	
-	}
-
-	if (show_compass) {
-	/* Provide a compass pointing 'north' */
-	rb->lcd_set_foreground(COLOR_YELLOW);
-		switch(pdir) {
-			case 0: //point down
-				draw_arrow(CX - 1, CY + crd_y[1]/2 + 12, 0);
-				rb->lcd_fillrect(CX - 1, CY + crd_y[1]/2 + 1,
-						 2, 4);
-				break;
-			case 2: //point up
-				draw_arrow(CX - 1, CY + crd_y[1]/2 + 1, 0);
-				rb->lcd_fillrect(CX - 1, CY + crd_y[1]/2 + 9,
-					       	 2, 4);
-				break;
-			case 1: //point left
-				draw_arrow(CX - 10, CY + crd_y[1]/2 + 9, 0);
-				rb->lcd_fillrect(CX - 2, CY + crd_y[1]/2 + 9,							 4, 2);
-				break;	
-			case 3: //point right
-				draw_arrow(CX + 6, CY + crd_y[1]/2 + 9, 0);
-				rb->lcd_fillrect(CX - 4, CY + crd_y[1]/2 + 9,
-						 4, 2);
-				break;
-		}
-	}	
+        copyumap(y + dy, x + dx, 0);    /* ahead */
+        copyumap(y, x, 1);              /* here */
+        copyumap(y - dx, x + dy, 0);    /* left */
+        copyumap(y + dx, x - dy, 0);    /* right */
+        if (!l)
+            copyumap(y - dx + dy, x + dy + dx, 0); /* lft ahead */
+        if (!r)
+            copyumap(y + dx + dy, x - dy + dx, 0); /* rt ahead */
+    }
 }
 
 /* unused code
 void
 shoot(void)
 {
-	int x, y, dx, dy;
-	int maxy, maxx;
+    int x, y, dx, dy;
+    int maxy, maxx;
 
-	dx = dirtab[(int)pdir].x;
-	dy = dirtab[(int)pdir].y;
-	getmaxyx(map, &maxy, &maxx);
+    dx = dirtab[(int)pdir].x;
+    dy = dirtab[(int)pdir].y;
+    getmaxyx(map, &maxy, &maxx);
 
-	x = px + dx;
-	y = py + dy;
-	while (!isfigequal(at(y, x), BLOCK)) {
-		x += dx;
-		y += dy;
-	}
-	if (x == 0 || y == 0 || x == maxx - 1 || y == maxy - 1)
-		//beep();
-		rb->splash(HZ, "SHOOT BEEP");
-	else
-		mvwaddch(map, y, x, SPACE);
+    x = px + dx;
+    y = py + dy;
+    while (at(y, x) != BLOCK)) {
+        x += dx;
+        y += dy;
+    }
+    if (x == 0 || y == 0 || x == maxx - 1 || y == maxy - 1)
+        rb->splash(HZ, "SHOOT BEEP");
+    else
+        map_write(map, y, x, SPACE);
 }
 */
 
-void
-win(void)
+void win(void)
 {
-	int i;
-	char amazed[8] = "amazing!";
-	fig newton;
+    /*
+    int i;
+    char amazed[8] = "amazing!";
+    char newton;
 
-	for (i=0; i <= 8; i++) {
-		newton.chr = amazed[i];
-		newton.attrib = A_ROB;
-		mvwaddch(msg, 0, i + 31, newton);
-	}
-	won++;
-	showmap();
-	show_map = 1;
+    for (i=0; i <= 8; i++) {
+        newton = amazed[i];
+        map_write(msg, 0, i + 31, newton);
+    }
+    */
+    won++;
+    showmap();
+    show_map = 1;
 }
 
 
 /* Try to move the player in the direction given */
-void
-trymove(enum dir dir)
+void trymove(enum dir dir)
 {
-	int nx, ny;
+    int nx, ny;
 
-	ny = py + dirtab[(int)dir].y;
-	nx = px + dirtab[(int)dir].x;
+    ny = py + dirtab[(int)dir].y;
+    nx = px + dirtab[(int)dir].x;
 
-	if (isfigequal(at(ny, nx), BLOCK)) {
-		//beep();
-		rb->splash(HZ/8, "Hit a wall!");
-		graphic_view();
-		return;
-	}
+    if (at(ny, nx) == BLOCK) {
+        rb->splash(HZ/8, "Hit a wall!");
+        graphic_view();
+        return;
+    }
 
-	if (isfigequal(at(ny, nx), GOAL))
-		win();
+    if (at(ny, nx) == GOAL)
+        win();
 
-	mappmove(ny, nx, pdir);
-	if (remember_visited && isfigequal(punder, SPACE))
-		punder = VISITED;
-	//drawview();
-	graphic_view();
+    mappmove(ny, nx, pdir);
+    if (remember_visited && punder == SPACE)
+        punder = VISITED;
+    graphic_view();
 }
 
-/*
 void
 walkleft(void)
 {
-	int a, l;
-	int dx, dy;
-	int owon = won;
+    int a, l;
+    int dx, dy;
+    int owon = won;
 
-	//nodelay(umap, 1);
-	while (1) {
-		rb->lcd_update();
-		// usleep(100000); // slower walk
-		if (won != owon)
-			break;
+    while (1) {
+        rb->lcd_update();
+        if (won != owon)
+            break;
 
-		dx = dirtab[(int)pdir].x;
-		dy = dirtab[(int)pdir].y;
-		
-		// ahead
-		a = (isfigequal(at(py + dy, px + dx), BLOCK));
-		// to the left
-		l = (isfigequal(at(py - dx, px + dy), BLOCK));
+        dx = dirtab[(int)pdir].x;
+        dy = dirtab[(int)pdir].y;
+        
+        /* ahead */
+        a = at(py + dy, px + dx) == BLOCK;
+        /* to the left */
+        l = at(py - dx, px + dy) == BLOCK;
 
-		if (!l) {
-			mappmove(py, px, LEFT_OF(pdir));
-			drawview();
-			rb->sleep(100000);
-			trymove(pdir);
-			continue;
-		}
-		if (a) {
-			mappmove(py, px, RIGHT_OF(pdir));
-			drawview();
-			continue;
-		} 
-		trymove(pdir);
-	}
-}
-*/
-
-void
-draw_text_map(void)
-{
-	int y, x;
-
-	showingmaze = false;
-	clearscreen();
-	werase(view);
-
-	for (y = 0; y < umap->maxy; y++) 
-		for (x = 0; x < umap->maxx; x++) {
-			mvwaddch(view, y, x, umap->coords[y][x]);
-			mvwaddch(view, py, px, ptab[(int)pdir]);
-		}
-	rb->button_get(true);
+        if (!l) {
+            mappmove(py, px, LEFT_OF(pdir));
+            graphic_view();
+            rb->sleep(2);
+            trymove(pdir);
+            continue;
+        }
+        if (a) {
+            mappmove(py, px, RIGHT_OF(pdir));
+            graphic_view();
+            continue;
+        } 
+        trymove(pdir);
+    }
 }
 
-void draw_tile_map(void)
+void draw_tile(int index, int x, int y)
 {
-	int x,y;
-	char map_unit;
-	int unit_fmt;
-
-	clearscreen();
-
-	#define DRAW_TILE( a )						\
-        	rb->lcd_bitmap_part( amaze_tiles, 0,			\
-                                     a*TILE_HEIGHT, TILE_WIDTH,		\
-                                     x * TILE_WIDTH,  			\
-                                     y * TILE_HEIGHT,			\
-                                     TILE_WIDTH, TILE_HEIGHT);
-
-	for(y=0; y < umap->maxy; y++)
-		for (x=0; x < umap->maxx; x++) {
-
-			map_unit = umap->coords[y][x].chr;
-			unit_fmt = umap->coords[y][x].attrib;
-			
-			switch (map_unit) {
-				case '.':
-					DRAW_TILE(t_visited);
-					break;
-				case '#':
-					DRAW_TILE(t_obspace);
-					break;
-				case '%':
-					DRAW_TILE(t_goal);
-					break;
-				case ' ':
-					if(unit_fmt==A_NORMAL)
-						DRAW_TILE(t_space)
-					else
-						DRAW_TILE(t_block)
-					break;
-			}
-	}
-	
-	x = sx;
-	y = sy;
-	DRAW_TILE(t_start);
-	
-	x = px;
-	y = py;
-	DRAW_TILE(pdir);
-
-	rb->lcd_update();
-	//rb->button_clear_queue();
-	//rb->button_get(true);
+    if (use_large_tiles == 1) /* size = 9 */
+        rb->lcd_bitmap_part (amaze_tiles_9, 0, index * 9, 9,
+                     x * 9, y * 9,
+                     9, 9);
+    else /* size = 7 */
+        rb->lcd_bitmap_part (amaze_tiles_7, 0, index * 7, 7,
+                     x * 7, y * 7,
+                     7, 7);
 }
 
-bool load_map(char *filename, winder *amap)
+void draw_tile_map(int xmin, int xmax, int ymin, int ymax)
 {
-	int fd;
-	size_t n;
-	int x,y;
-	//int i;
-	//int valid=0;
-	//int num_file_chars= (23*35); // 10 more chars for good luck
-	//char buf[num_file_chars];
-	int maxx, maxy;
+    int x,y;
+    char map_unit;
+    int tdex = 7; /* tile index */
 
-	getmaxyx(amap, &maxy, &maxx);
-	maxx++; //to allow for \n
-	char line[maxx];
-	
-	fig newton = BLOCK;
+    enum tile_index { t_down=0, t_right=1, t_up=2, t_left=3, t_visited=4,
+          t_obspace=5, t_goal=6, t_block=7, t_space=8, t_start=9 };
 
-	/* load a map */	
-	fd = rb->open(filename, O_RDONLY);
-	if (fd < 0) {
-		LOGF("Invalid map file: %s\n", filename);
-		return false;
-	}
+    for(y = ymin; y <= ymax; y++)
+        for(x = xmin; x <= xmax; x++) {
 
-	/*
-	n=rb->read(fd, buf, num_file_chars);
-	if (n <= 0) return false;
-	rb->close(fd);
-		
-	for(i=0, y=0; i < num_file_chars; i++) {
-		switch (buf[i]) {
-			case ' ':
-				newton = SPACE;
-				break;
-			case 'B':
-				newton = BLOCK;
-				break;
-			case '%':
-				newton = GOAL;
-				break;
-			case '#':
-				newton = OBSPACE;
-				break;
-			case '.':
-				newton = VISITED;
-				break;
-		}
-		
-		if((i+1) % 35 != 0)
-			amap->coords[i / 35][i % 35] = newton;
-	}
-	*/
+            map_unit = map_read(umap, y, x);
+            
+            switch (map_unit) {
+                case '.':
+                    tdex = t_visited;
+                    break;
+                case '#':
+                    tdex = t_obspace;
+                    break;
+                case '+':
+                    tdex = t_start;
+                    break;
+                case '%':
+                    tdex = t_goal;
+                    break;
+                case ' ':
+                    tdex = t_space;
+                    break;
+                case 'B':
+                    tdex = t_block;
+                    break;
+            }
+            draw_tile(tdex, x - xmin, y - ymin);
+        }
+    if(sx>=xmin && sx<=xmax && sy>=ymin && sy<=ymax) {
+        x = sx;
+        y = sy;
+        draw_tile(t_start, x - xmin, y - ymin);
+    }
+    
+    if(px>=xmin && px<=xmax && py>=ymin && py<=ymax) {
+        x = px;
+        y = py;
+        draw_tile(pdir, x - xmin, y - ymin);
+    }
 
-	for(y=0; y < maxy ; y++) {
-		n = rb->read(fd, line, sizeof(line));
-		if (n <= 0) {
-			
-			return false;
-		}
-		for(x=0; x < maxx; x++) {
-			switch(line[x]) {
-				case '\n':
-					break;
-				case '0': case '1': case '2': case '3':
-					py = y;
-					px = x;
-					pdir = (int)line[x] - 48;
-					newton = ptab[(int)pdir];
-					break;
-				case '+':
-					sy = y;
-					sx = x;
-					newton = START;
-					break;
-				case ' ':
-					newton = SPACE;
-					break;
-				case 'B':
-					newton = BLOCK;
-					break;
-				case '%':
-					newton = GOAL;
-					gy = y;
-					gx = x;
-					break;
-				case '#':
-					newton = OBSPACE;
-					break;
-				case '.':
-					newton = VISITED;
-					break;
-			}
-		if (line[x] != '\n')
-			mvwaddch(amap, y, x, newton);
-		}
-	}
-	rb->close(fd);
-	return true;
+    rb->lcd_update();
+}
+
+void check_map_bounds(int *xmin, int *xmax, int *ymin, int *ymax)
+{   
+    int maxx, maxy;
+
+    getmaxyx(&maxy, &maxx);
+
+    /* bounds check x */
+    if(*xmin < 0) {
+        *xmax = *xmax - *xmin;
+        *xmin = 0;
+    }
+    if(*xmax > maxx) {
+        *xmin = *xmin - *xmax + maxx;
+        *xmax = maxx;
+    }   
+    
+    /* bounds check y */
+    if(*ymin < 0) {
+        *ymax = *ymax - *ymin;
+        *ymin = 0;
+    }
+    if(*ymax > maxy) {
+        *ymin = *ymin - *ymax + maxy;
+        *ymax = maxy;
+    }
+}
+
+void calc_map_size(int *xmin, int *xmax, int *ymin, int *ymax)
+{   
+    int tile_size; /* runtime option */
+    int vx, vy; /* maxx, maxy of view */
+    int midx, midy; /* midpoint x, y of view */
+    int maxx, maxy; /* maxx, maxy of map */
+
+    getmaxyx(&maxy, &maxx);
+    
+    if (use_large_tiles == 1)
+        tile_size = 9;
+    else
+        tile_size = 7;
+
+    vx = LCD_WIDTH / tile_size;
+    if (vx > maxx)
+        vx = maxx;
+    vy = LCD_HEIGHT / tile_size;
+    if (vy > maxy)
+        vy = maxy;
+
+    midx = vx / 2;
+    midy = vy / 2;
+
+    *xmin = px - midx;
+    if(vx % 2 == 0)
+        *xmax = px + midx - 1;
+    else
+        *xmax = px + midx;
+
+    *ymin = py - midy;
+    if(vy % 2 == 0)
+        *ymax = py + midy - 1;
+    else
+        *ymax = py + midy;
+    
+}
+
+
+void draw_portion_map(void)
+{
+    int xmin, xmax, ymin, ymax; /* coords of map corners */
+    bool quit_map;
+    int input;
+        
+    clearscreen();
+    
+    calc_map_size(&xmin, &xmax, &ymin, &ymax);
+    check_map_bounds(&xmin, &xmax, &ymin, &ymax);
+    draw_tile_map(xmin, xmax, ymin, ymax);
+
+    quit_map = false;
+
+    while (!quit_map) {
+
+#ifdef __PLUGINLIB_ACTIONS_H__
+        input = pluginlib_getaction(TIMEOUT_BLOCK, plugin_contexts, 2);
+#else
+        input = rb->button_get(false);
+#endif
+
+        switch(input) {
+            case BUT_QUIT:
+                quit_map = true;
+                break;
+            case BUT_UP:
+            case BUT_UPRPT:
+                ymin--;
+                ymax--;
+                break;
+            case BUT_DOWN:
+            case BUT_DOWNRPT:
+                ymin++;
+                ymax++;
+                break;
+            case BUT_LEFT:
+            case BUT_LEFTRPT:
+                xmin--;
+                xmax--;
+                break;
+            case BUT_RIGHT:
+            case BUT_RIGHTRPT:
+                xmin++;
+                xmax++;
+                break;
+            default:
+                break;
+        }
+        check_map_bounds(&xmin, &xmax, &ymin, &ymax);
+        draw_tile_map(xmin, xmax, ymin, ymax);
+    }
+}
+
+bool load_map(char *filename, char *amap)
+{
+    int fd;
+    size_t n;
+    int x,y;
+    int maxxy;
+    char newton = BLOCK;
+    char map_size[2];
+
+    /* load a map */    
+    fd = rb->open(filename, O_RDONLY);
+    if (fd < 0) {
+        LOGF("Invalid map file: %s\n", filename);
+        return false;
+    }
+
+    n = rb->read(fd, map_size, sizeof(map_size));
+    if (n <= 0) {
+        rb->splash(HZ*2, "Invalid map size.");
+        return false;
+    }
+    
+    maze_size = (int)map_size[0] - 48;
+    maxxy = MAP_CONST * (maze_size + 1);
+    char line[maxxy + 1];
+
+    for(y=0; y < maxxy ; y++) {
+        n = rb->read(fd, line, sizeof(line));
+        if (n <= 0) {
+            rb->splash(HZ*2, "Loop error.");
+            return false;
+        }
+        for(x=0; x < maxxy; x++) {
+            switch(line[x]) {
+                case '\n':
+                    break;
+                case '0': case '1': case '2': case '3':
+                    py = y;
+                    px = x;
+                    pdir = (int)line[x] - 48;
+                    newton = ptab[(int)pdir];
+                    break;
+                case '+':
+                    sy = y;
+                    sx = x;
+                    newton = START;
+                    break;
+                case ' ':
+                    newton = SPACE;
+                    break;
+                case 'B':
+                    newton = BLOCK;
+                    break;
+                case '%':
+                    newton = GOAL;
+                    gy = y;
+                    gx = x;
+                    break;
+                case '#':
+                    newton = OBSPACE;
+                    break;
+                case '.':
+                case 'S': case 'W': case 'N': case 'E':
+                    newton = VISITED;
+                    break;
+            }
+            if(is_visited(newton)) {
+                switch(line[x]) {
+                    case 'S': 
+                        newton = 0;
+                        break;
+                    case 'W':
+                        newton = 1;
+                        break;
+                    case 'N':
+                        newton = 2;
+                        break;
+                    case 'E':
+                        newton = 3;
+                        break;
+                }
+            }
+        if (line[x] != '\n')
+            map_write(amap, y, x, newton);
+        }
+    }
+    rb->close(fd);
+    return true;
 }
 
 bool load_game(void)
 {
-	if (load_map(UMAP_FILE, umap) && load_map(MAP_FILE, map))
-		return true;
-	else
-		return false;
+    if (load_map(UMAP_FILE, umap) && load_map(MAP_FILE, map))
+        return true;
+    else
+        return false;
 }
 
-				
-bool save_map(char *filename, winder *amap)
+                
+bool save_map(char *filename, char *amap)
 {
-	int x,y;
-	char map_unit;
-	int unit_fmt;
-	int fd;
-	char line[35];
+    int x,y;
+    int maxy, maxx;
+    char map_unit;
+    int fd;
+    int line_len = (maze_size + 1) * MAP_CONST + 1;
+    char line[line_len];
+    char map_size[2] = {'0','\n'};
 
-	line[34]='\n'; //last cell is a linefeed
-			
+    line[line_len - 1] = '\n'; /* last cell is a linefeed */
+    map_size[0] = (char)(maze_size + 48);
 
-	fd = rb->open(filename, O_WRONLY|O_CREAT|O_TRUNC);	
-	if(fd >= 0) {	
-		for(y=0; y < amap->maxy; y++) {
-			for (x=0; x < amap->maxx; x++) {
-				map_unit = amap->coords[y][x].chr;
-				unit_fmt = amap->coords[y][x].attrib;
-				
-				if(y == py && x == px)
-					line[x] = (char)(pdir + 48);
-				else if(y == sy && x == sx)
-					line[x] = '+';
-				else {
-					switch (map_unit) {
-						case ' ':
-							if(unit_fmt == A_NORMAL)
-								line[x] = ' ';
-							else 
-								line[x] = 'B';
-							break;
-						default:		
-							line[x] = map_unit;
-							break;
-					}
-				}
-			}
-			rb->write(fd,line,35);
-		}
-		rb->close(fd);
-	}
-	else return false;
+    fd = rb->open(filename, O_WRONLY|O_CREAT|O_TRUNC);  
+    if(fd >= 0) {
+        rb->write(fd, map_size, 2);
 
-	return true;
+        getmaxyx(&maxy, &maxx);
+        
+        for(y=0; y < maxy; y++) {
+            for (x=0; x < maxx; x++) {
+                map_unit = map_read(amap, y, x);
+                
+                if(y == py && x == px)
+                    line[x] = (char)(pdir + 48);
+                else if(y == sy && x == sx)
+                    line[x] = '+';
+                else {
+                    switch (map_unit) {
+                        case '.':
+                            line[x] = '.';
+                            break;
+                        case A_DOWN:
+                            line[x] = 'S';
+                            break;
+                        case A_LEFT:
+                            line[x] = 'W';
+                            break;
+                        case A_UP:
+                            line[x] = 'N';
+                             break;
+                        case A_RIGHT:
+                            line[x] = 'E';
+                            break;
+                        default:
+                            line[x] = map_unit;
+                            break;
+                    }
+                }
+            }
+            rb->write(fd, line, line_len);
+        }
+        rb->close(fd);
+    }
+    else return false;
+
+    return true;
 }
 
 bool save_game(void)
 {
-	rb->splash(0, "Saving game...");
-	if (save_map(UMAP_FILE, umap) && save_map(MAP_FILE, map))
-		return true;
-	else
-		return false;
+    rb->splash(0, "Saving game...");
+    if (save_map(UMAP_FILE, umap) && save_map(MAP_FILE, map))
+        return true;
+    else
+        return false;
 }
-	
+    
 int pause_menu(void)
 {
-	bool menu_quit = false; 
-	int result = 1;
-	int selected = 0;
-	MENUITEM_STRINGLIST(menu,"Options", NULL, "Continue",
-			"Save & Continue", "Save & Quit", "Quit");
-	
-	while(!menu_quit) {
-		clearscreen();
-		switch(rb->do_menu(&menu, &selected, NULL, false)) {
-			case 0:
-				menu_quit = true;
-				break;
-			case 1:
-				if (save_game()) {
-					//drawview();
-					graphic_view();
-					menu_quit=true;
-				}
-				else
+    bool menu_quit = false; 
+    int selection = 0, result = 0, status = 1;
 
-				break;
-			case 2:
-				if (save_game()) {
-					result = 2;
-					menu_quit = true;
-				}
-				else
-					rb->splash(HZ*3, "Save Error");
-				break;
-			case 3:
-				menu_quit = true;
-				result = 0; 
-				break;
-		}
-	}
-	return result;
+    MENUITEM_STRINGLIST(menu,"Options", NULL, "Continue", "View Map",
+            "Mark Ground", "Clear Mark", "Show Solution",
+            "Save & Continue", "Save & Quit", "Quit");
+    
+    clearscreen();
+
+    while(!menu_quit) {
+        result = rb->do_menu(&menu, &selection, NULL, false);
+        switch(result) {
+            case 0:
+                menu_quit = true;
+                break;
+            case 1:
+                menu_quit = true;
+                draw_portion_map();
+                break;
+            case 2:
+                menu_quit = true;
+                punder = pdir + '0';
+                break;
+            case 3:
+                menu_quit = true;
+                punder = VISITED;
+                break;
+            case 4:
+                menu_quit = true;
+                cheated++;
+                walkleft();
+                break;
+            case 5:
+                menu_quit = true;
+                if (save_game())
+                    graphic_view();
+                else
+                    rb->splash(HZ*3, "Save Error");
+                break;
+            case 6:
+                menu_quit = true;
+                if (save_game())
+                    status = 2;
+                else
+                    rb->splash(HZ*3, "Save Error");
+                break;
+            case 7:
+                menu_quit = true;
+                status = 0; 
+                break;
+        }
+    }
+    return status;
 }
 
 int
 amaze(bool loading_maze)
 {
-	int quitting;
-	int i;
-	//char amazed[6] = "amaze!";
-	//fig newton;
+    int quitting;
+    int i;
+    int input;
 
-	clearscreen();
-	rb->lcd_set_backdrop(NULL);
+    clearscreen();
+    rb->lcd_setfont(FONT_SYSFIXED);
 
-	rb->lcd_setfont(FONT_SYSFIXED);
+    crd_x[0] = LCD_WIDTH + 1;
+    crd_y[0] = LCD_HEIGHT + 1;
+    for (i=1; i < MAX_DEPTH + 1; i++) {
+        crd_x[i] = crd_x[i-1]*2/3;
+        if(crd_x[i] % 2 != 0) crd_x[i]++;
+        crd_y[i] = crd_y[i-1]*2/3;
+        if(crd_y[i] % 2 != 0) crd_y[i]++;
+    }
 
-	map = &map_winder;
-	umap = &umap_winder;
-	view = &view_winder;
-	msg = &msg_winder;
-	
-	view->write_to_screen = true;
-	view->maxy = 23;
-	view->maxx = 45;
-	view->offy = 0;
-	view->offx = 0;
+    clearmap(umap);
 
-	/* This window is never updated, used purely for storage */
-	//map = newwin(23, 79 - 45, 0, 45);
-	map->write_to_screen = false;
-	map->maxy = 23;
-	map->maxx = 79-45;
-	map->offy = 0;
-	map->offx = 0; //change
+    if (!loading_maze)
+        makemaze();
+    else
+        if (!load_game()) {
+            rb->splash(HZ*2, "Fatal Error loading map.");
+            return 0;
+        }
 
-	umap->write_to_screen = false;
-	umap->maxy = 23;
-	umap->maxx = 79-45;
-	umap->offy = 0;
-	umap->offx = 0; //change
+    /* Show where the goal is */
 
-	clearmap(umap);
+    copyumap(gy, gx, 1);
 
-	msg->write_to_screen = false;
-	msg->maxy = 1;
-	msg->maxx = 43;
-	msg->offy = 0; //change
-	msg->offx = 0;
+    rb->lcd_update();
 
-	if (!loading_maze)
-		makemaze();
-	else
-		if (!load_game()) {
-			rb->splash(HZ*2, "Final Error loading map.");
-			return 0;
-		}
+    quitting = 0;
 
-	/* Show where the goal is */
+    mappmove(py, px, pdir);
 
-	copyumap(gy, gx, 1);
+    if (remember_visited)
+        punder = VISITED;
+    else
+        punder = SPACE;
+    
+    clearscreen();
+    graphic_view();
 
-	/*
-	werase(msg);
-	newton.attrib = A_ROB;
-	for (i=0; i < 6; i++) {
-		newton.chr = amazed[i];
-		mvwaddch(msg, 0, i + 19, newton);
-	}
-	*/
+    while (!quitting && !won) {
+        
+        rb->lcd_update();
 
-	//mvwprintw(msg, 0, 19, "amaze!");
-	//wnoutrefresh(msg);
-	rb->lcd_update();
+#ifdef __PLUGINLIB_ACTIONS_H__
+        input = pluginlib_getaction(TIMEOUT_BLOCK, plugin_contexts, 2);
+#else
+        input = rb->button_get(false);
+#endif
+        
+        switch (input) {
+        case BUT_QUIT:
+            i = pause_menu();
+            rb->lcd_setfont(FONT_SYSFIXED);
+            clearscreen();
+            graphic_view();
+            
+            switch (i) {
+                case 0:
+                    quitting = 1;
+                    break;
+                case 1:             
+                    break;
+                case 2:
+                    rb->splash(HZ*3, "See you later!");
+                    return 0;
+                    break;
+            }
+            break;
+        case BUT_UP:
+        case BUT_UPRPT:
+            trymove(pdir);
+            break;
+        case BUT_DOWN:
+        case BUT_DOWNRPT:
+            trymove(REVERSE_OF(pdir));
+            break;
+        case BUT_LEFT: 
+            mappmove(py, px, LEFT_OF(pdir));
+            graphic_view();
+            break;
+        case BUT_RIGHT: 
+            mappmove(py, px, RIGHT_OF(pdir));
+            graphic_view();
+            break;
+        /*
+        case BUT_MARK:
+            punder = pdir + '0';
+            graphic_view();
+            break;
+        */
+        case BUT_COMPASS:
+            draw_pointer(pdir, true);
+            rb->sleep(HZ * 2);
+            graphic_view();
+            break;
+        /*
+        case ' ':
+            if (can_shoot) {
+                shoot();
+                cheated++;
+                drawview();
+            } else
+                beep();
+            break;
+    
+        case BUTTON_MENU:
+            cheated++;
+            walkleft();
+            break;
+    
+        */
+        }
+    }
+    
+    rb->lcd_update();
+    //graphic_view();
+    if (won) {
+        won = false; /* reset boolean */
+        if (cheated) {
+            rb->splash(HZ*2, "You cheated.");
+            return 0;
+        }
+        rb->splash(HZ*3, "You win!");
+        return 1;
+    }
+    else {
+        rb->splash(HZ*3, "You lose.");
+        return 0;
+    }
+}
 
-	quitting = 0;
+bool save_prefs(char *filename)
+{
+    int fd;
+    char ms[2] = { (char)(maze_size) + '0', '\n' };
+    char sm[2] = { (char)(show_map) + '0', '\n' };
+    char rv[2] = { (char)(remember_visited) + '0', '\n' };
+    char lt[2] = { (char)(use_large_tiles) + '0', '\n' };
+    
+    fd = rb->open(filename, O_WRONLY|O_CREAT|O_TRUNC);
+    if(fd >= 0) {
+        rb->write(fd, ms, 2);
+        rb->write(fd, sm, 2);
+        rb->write(fd, rv, 2);
+        rb->write(fd, lt, 2);
+    }
+    else {
+        rb->splash(HZ, "Could not save preferences.");
+        return false;
+    }
+    rb->close(fd);
+    return true;
+}
 
-	mappmove(py, px, pdir);
+bool load_prefs(char *filename)
+{
+    int fd;
+    size_t n;
+    char instr[2];
+    
+    fd = rb->open(filename, O_RDONLY);
+    if (fd < 0) {
+        LOGF("Invalid preferences file: %s\n", filename);
+        return false;
+    }
+    
+    n = rb->read(fd, instr, sizeof(instr));
+    maze_size = (int)(instr[0] - '0');
+    n = rb->read(fd, instr, sizeof(instr));
+    show_map = (bool)(instr[0] - '0');
+    n = rb->read(fd, instr, sizeof(instr));
+    remember_visited = (bool)(instr[0] - '0');
+    n = rb->read(fd, instr, sizeof(instr));
+    use_large_tiles = (bool)(instr[0] - '0');
+    rb->close(fd);
 
-	if (remember_visited)
-		punder = VISITED;
-	else
-		punder = SPACE;
-	
-	clearscreen();
-	//drawview();
-	graphic_view();
-
-	while (!quitting && !won) {
-		//wmove(umap, 0, 0);
-		//doupdate();
-		
-		rb->lcd_update();
-		
-		//nodelay(umap, 0);
-		//switch (wgetch(umap)) {
-
-		switch (rb->button_get(true)) {
-		case BUTTON_MENU|BUTTON_SELECT:
-			i = pause_menu();
-			rb->lcd_setfont(FONT_SYSFIXED);
-			clearscreen();
-			//drawview();
-			graphic_view();
-			
-			switch (i) {
-				case 0:
-					quitting = 1;
-					break;
-				case 1:				
-					break;
-				case 2:
-					rb->splash(HZ*3, "See you later!");
-					return 0;
-					break;
-			}
-			break;
-		case BUTTON_MENU:
-			trymove(pdir);
-			break;
-		case BUTTON_PLAY:
-			trymove(REVERSE_OF(pdir));
-			break;
-		case BUTTON_LEFT|BUTTON_SELECT:
-			trymove(LEFT_OF(pdir));
-			break;
-		case BUTTON_RIGHT|BUTTON_SELECT:
-			trymove(RIGHT_OF(pdir));
-			break;
-		case BUTTON_LEFT: 
-			mappmove(py, px, LEFT_OF(pdir));
-			//drawview();
-			graphic_view();
-			break;
-		case BUTTON_RIGHT: 
-			mappmove(py, px, RIGHT_OF(pdir));
-			//drawview();
-			graphic_view();
-			break;
-		case BUTTON_PLAY|BUTTON_SELECT:
-			draw_tile_map();
-			rb->sleep(250);
-			rb->backlight_on();
-			rb->sleep(250);
-			clearscreen();
-			//drawview();
-			graphic_view();
-			break;
-		/*
-		case ' ':
-			if (can_shoot) {
-				shoot();
-				cheated++;
-				drawview();
-			} else
-				beep();
-			break;
-	
-		case BUTTON_MENU:
-			cheated++;
-			walkleft();
-			break;
-	
-		*/
-		}
-
-		/*
-		if (won && !continue_on_win) {
-			//wmove(umap, 0, 0);
-			//doupdate();
-			rb->lcd_update();
-			//beep();
-			//sleep(1);
-			break;
-		}
-		*/
-	}
-
-	//endwin();
-
-	if (won) {
-		if (cheated) {
-			rb->splash(HZ*2, "You cheated.");
-			//printf("You cheated.\n");
-			return 0;
-		}
-		rb->splash(HZ*3, "You win!");
-		//printf("You win!\n");
-		return 1;
-	} else {
-		rb->splash(HZ*3, "You lose.");
-		//printf("You lose.\n");
-		return 0;
-	}
+    return true;
 }
 
 bool options_menu(void)
 {
-	int selection = 0;
-	bool menu_quit = false, result = true;
+    int result = 0, selection = 0;
+    bool menu_quit = false, status = true;
 
-	MENUITEM_STRINGLIST(menu,"Options",NULL,"Play Game", "Load Game",
-			"Show Compass","Show Map",
-			"Remember Path","Quit");
-		
-	while(!menu_quit) {
-		clearscreen();
-		switch(rb->do_menu(&menu, &selection, NULL, false)) {
-			case 0:
-				if(!amaze(false))
-					menu_quit = true;
-				break;
-			case 1:
-				if(!amaze(true))
-					menu_quit = true;
-				break;
-			case 2:
-				rb->set_int("Show Compass",
-				  "", INT, &show_compass,
-				  NULL, 1, 0, 1, NULL);
-				break;
-			case 3:
-				rb->set_int("Show Map",
-				  "", INT, &show_map,
-				  NULL, 1, 0, 1, NULL);
-				break;
-			case 4:
-				rb->set_int("Remember Path",
-				  "", INT, &remember_visited,
-				  NULL, 1, 0, 1, NULL);
-				break;
-			case 5:
-				menu_quit = true;
-				result = false;
-				break;
-		}
-	}
-	return result;
+    MENUITEM_STRINGLIST(menu,"Options", NULL, "Play Game", "Load Game",
+                        "Set Maze Size", "Show Map", "Remember Path",
+                        "Use Large Tiles", "Quit");
+        
+    clearscreen();
+
+    if (!load_prefs(PREF_FILE))
+        rb->splash(HZ, "No preferences saved.");
+            
+    while(!menu_quit) {
+        result = rb->do_menu(&menu, &selection, NULL, false);
+        switch(result) {
+            case 0:
+                if (!save_prefs(PREF_FILE))
+                    rb->splash(HZ, "Could not save preferences.");
+                if(!amaze(false))
+                    menu_quit = true;
+                break;
+            case 1:
+                if (!save_prefs(PREF_FILE))
+                    rb->splash(HZ, "Could not save preferences.");
+                if(!amaze(true))
+                    menu_quit = true;
+                break;
+            case 2:
+                rb->set_option("Set Maze Size", &maze_size, INT,
+                            mazesize_text, 4, NULL);
+                break;
+            case 3:
+                rb->set_option("Show Map", &show_map, BOOL,
+                            noyes_text, 2, NULL);
+                break;
+            case 4:
+                rb->set_option("Remember Path", &remember_visited, BOOL,
+                            noyes_text, 2, NULL);
+                break;
+            case 5:
+                rb->set_option("Use Large Tiles", &use_large_tiles, BOOL,
+                            noyes_text, 2, NULL);
+                break;
+            case 6:
+                menu_quit = true;
+                status = false;
+                break;
+        }
+    }
+    return status;
 }
 
 enum plugin_status plugin_start(const void* parameter)
 {
-  (void) parameter;
+    (void) parameter;
   
+    rb->srand(*rb->current_tick);
   
-  rb->srand(*rb->current_tick);
-  
-  //hard-code in program default options - will fix
-  show_compass=1;
-  show_map=1;
-  remember_visited=1;
+    /* hard-code in program default options */
+    show_map=1;
+    remember_visited=1;
+    use_large_tiles=1;
+    maze_size=1;
 
-  //let's go, gentlemen, we have some work to do
-  rb->lcd_set_backdrop(NULL);
+  /* let's go, gentlemen, we have some work to do */
+#if LCD_DEPTH > 1
+    rb->lcd_set_backdrop(NULL);
+#endif
   
-  if(!options_menu()) return PLUGIN_OK;
+    if(!options_menu()) return PLUGIN_OK;
   
-  rb->lcd_setfont(FONT_UI);
+    rb->lcd_setfont(FONT_UI);
 
-  return PLUGIN_OK;
+    return PLUGIN_OK;
 }
